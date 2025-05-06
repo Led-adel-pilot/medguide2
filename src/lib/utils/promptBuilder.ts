@@ -114,12 +114,12 @@ The JSON object MUST contain exactly these three keys: "mostProbableDiagnosis", 
 
 // Define the system prompt specifically for generating the final MEDICAL RECORD (Unchanged Content, just using constant)
 const RECORD_SYSTEM_PROMPT_CONTENT = `Consultation Time: {TIME}
-You tasked with synthesizing a Medical Record based on a provided medical anamnesis conversation.
+You tasked with synthesizing a Medical Record based on a provided medical anamnesis conversation. Use bullet points.
 **CRITICAL: Your output MUST be a single JSON object.**
 **WRITE IN FRENCH**
 
 **Output Format for Final Medical Record:**
-The JSON object MUST contain exactly one key: "medicalRecord". The value must be a string containing the markdown content of the Medical Observation.
+The JSON object MUST contain exactly one key: "medicalRecord". The value must be a string containing the markdown content of the Medical Record.
 \`\`\`json
 {
  "medicalRecord": "A markdown file containning a Medical Observation based on the provided conversation history"
