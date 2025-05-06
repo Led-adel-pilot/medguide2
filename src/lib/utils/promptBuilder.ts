@@ -135,20 +135,10 @@ function getCurrentLocalTime(): string {
     return new Date().toLocaleString();
 }
 
-const ANAMNESIS_SYSTEM_PROMPT: ChatCompletionMessageParam = {
-  role: "system",
-  content: ANAMNESIS_SYSTEM_PROMPT_CONTENT.replace('{TIME}', getCurrentLocalTime()),
-};
-
 // New System Prompt Message Param
 const PATIENT_EXPLANATION_SYSTEM_PROMPT: ChatCompletionMessageParam = {
     role: "system",
     content: PATIENT_EXPLANATION_SYSTEM_PROMPT_CONTENT.replace('{TIME}', getCurrentLocalTime()),
-};
-
-const RECORD_SYSTEM_PROMPT: ChatCompletionMessageParam = {
-  role: "system",
-  content: RECORD_SYSTEM_PROMPT_CONTENT.replace('{TIME}', getCurrentLocalTime()),
 };
 
 // Interface for initial user data
@@ -289,18 +279,14 @@ export function buildGenerateRecordPrompt(history: ChatCompletionMessageParam[],
               const parsedContent = JSON.parse(msg.content);
               // Check if it matches the PatientExplanationData structure
               if (
-                  Array.isArray(parsedContent.mostProbableDiagnosis) &&
-                  typeof parsedContent.advice === 'string' &&
-                  Array.isArray(parsedContent.recommendedSpecialists) &&
-                  // Ensure only these keys exist at the top level
-                  Object.keys(parsedContent).length === 3 &&
-                  parsedContent.hasOwnProperty('mostProbableDiagnosis') &&
-                  parsedContent.hasOwnProperty('advice') &&
-                  parsedContent.hasOwnProperty('recommendedSpecialists')
+                  'mostProbableDiagnosis' in parsedContent && Array.isArray(parsedContent.mostProbableDiagnosis) &&
+                  'advice' in parsedContent && typeof parsedContent.advice === 'string' &&
+                  'recommendedSpecialists' in parsedContent && Array.isArray(parsedContent.recommendedSpecialists) &&
+                  Object.keys(parsedContent).length === 3
               ) {
                   return false; // Exclude this message
               }
-          } catch (e) {
+          } catch (_) {
               // If parsing fails or it's not the specific JSON structure, keep it
           }
       }
@@ -342,96 +328,92 @@ export function buildGenerateRecordPrompt(history: ChatCompletionMessageParam[],
 
 
 // Updated parser function to handle questions, readiness signal, patient explanation, and medical record
-export function parseAIResponse(response: any):
+export function parseAIResponse(response: unknown):
   | { type: 'questions', data: QuestionResponse }
   | { type: 'readyForRecord', data: ReadyForRecordResponse }
   | { type: 'patientExplanation', data: PatientExplanationData } // New type
   | { type: 'medicalRecord', data: MedicalRecordResponse } // Renamed type
   | { type: 'error', message: string }
 {
-  // Basic check: Ensure response is an object
   if (typeof response !== 'object' || response === null) {
       return { type: 'error', message: 'Invalid AI response format: Not an object.' };
   }
 
   try {
-    // 1. Check for the "Ready for Record" signal (Updated)
-    // It should ONLY have readyForRecord: true and optionally explanation
-    if (response.readyForRecord === true) {
-        // Validate optional explanation
-        if (response.explanation && typeof response.explanation !== 'string') {
+    // 1. Check for the "Ready for Record" signal
+    if ('readyForRecord' in response && response.readyForRecord === true) {
+        const resp = response as { readyForRecord: true, explanation?: unknown };
+        if ('explanation' in resp && resp.explanation && typeof resp.explanation !== 'string') {
             return { type: 'error', message: 'Invalid explanation type in readyForRecord response.' };
         }
-        // Ensure no unexpected keys other than readyForRecord and explanation
         const allowedKeys = ['readyForRecord', 'explanation'];
-        const extraKeys = Object.keys(response).filter(key => !allowedKeys.includes(key));
+        const extraKeys = Object.keys(resp).filter(key => !allowedKeys.includes(key));
         if (extraKeys.length > 0) {
              return { type: 'error', message: `Unexpected keys in readyForRecord response: ${extraKeys.join(', ')}. Expected only 'readyForRecord' and optional 'explanation'.` };
         }
-        // Return only the expected fields
         const responseData: ReadyForRecordResponse = { readyForRecord: true };
-        if (response.explanation) {
-            responseData.explanation = response.explanation;
+        if (resp.explanation && typeof resp.explanation === 'string') { // Ensure explanation is string before assigning
+            responseData.explanation = resp.explanation;
         }
         return { type: 'readyForRecord', data: responseData };
     }
 
-    // 2. Check for the Patient Explanation structure (New)
-    else if (
-        Array.isArray(response.mostProbableDiagnosis) && response.mostProbableDiagnosis.every((item: any) => typeof item === 'string') &&
-        typeof response.advice === 'string' &&
-        Array.isArray(response.recommendedSpecialists) && response.recommendedSpecialists.every((item: any) => typeof item === 'string')
+    // 2. Check for the Patient Explanation structure
+    if (
+        'mostProbableDiagnosis' in response && Array.isArray(response.mostProbableDiagnosis) && response.mostProbableDiagnosis.every((item: unknown) => typeof item === 'string') &&
+        'advice' in response && typeof response.advice === 'string' &&
+        'recommendedSpecialists' in response && Array.isArray(response.recommendedSpecialists) && response.recommendedSpecialists.every((item: unknown) => typeof item === 'string')
     ) {
-        // Ensure no unexpected top-level keys for this type
+        const resp = response as { mostProbableDiagnosis: string[], advice: string, recommendedSpecialists: string[] };
         const allowedKeys = ['mostProbableDiagnosis', 'advice', 'recommendedSpecialists'];
-        const extraKeys = Object.keys(response).filter(key => !allowedKeys.includes(key));
+        const extraKeys = Object.keys(resp).filter(key => !allowedKeys.includes(key));
         if (extraKeys.length > 0) {
              return { type: 'error', message: `Unexpected keys in patientExplanation response: ${extraKeys.join(', ')}` };
         }
-        // Type assertion might be needed if TypeScript isn't inferring correctly
-        return { type: 'patientExplanation', data: response as PatientExplanationData };
+        return { type: 'patientExplanation', data: resp as PatientExplanationData };
     }
 
-    // 3. Check for the final medical record structure (exactly {"medicalRecord": "string"}) (Unchanged logic, renamed type)
-    else if (typeof response.medicalRecord === 'string' && Object.keys(response).length === 1) {
+    // 3. Check for the final medical record structure
+    if ('medicalRecord' in response && typeof response.medicalRecord === 'string' && Object.keys(response).length === 1) {
         return { type: 'medicalRecord', data: { medicalRecord: response.medicalRecord } };
     }
 
-    // 4. Check for the question structure (Unchanged logic)
-    else if (typeof response.explanation === 'string' && Array.isArray(response.questions)) {
-       // Basic validation of question array
-       if (response.questions.every((q: any) => q && typeof q.id === 'string' && typeof q.text === 'string' && (!q.suggestions || Array.isArray(q.suggestions)))) {
-            // Ensure no unexpected top-level keys for this type
+    // 4. Check for the question structure
+    if ('explanation' in response && typeof response.explanation === 'string' && 'questions' in response && Array.isArray(response.questions)) {
+       const resp = response as { explanation: string, questions: unknown[] };
+       if (resp.questions.every((q: unknown) =>
+           typeof q === 'object' && q !== null &&
+           'id' in q && typeof (q as Question).id === 'string' &&
+           'text' in q && typeof (q as Question).text === 'string' &&
+           (!('suggestions' in q) || (Array.isArray((q as Question).suggestions) && (q as Question).suggestions?.every(s => typeof s === 'string')))
+       )) {
             const allowedKeys = ['explanation', 'questions'];
-            const extraKeys = Object.keys(response).filter(key => !allowedKeys.includes(key));
+            const extraKeys = Object.keys(resp).filter(key => !allowedKeys.includes(key));
             if (extraKeys.length > 0) {
                  return { type: 'error', message: `Unexpected keys in questions response: ${extraKeys.join(', ')}` };
             }
-           return { type: 'questions', data: response as QuestionResponse };
+           return { type: 'questions', data: resp as QuestionResponse };
        } else {
           return { type: 'error', message: 'Invalid structure within questions array.' };
        }
     }
 
     // 5. If none of the above match, it's an unexpected format
-    else {
-      console.error("Unexpected AI response format received:", response);
-      // Provide more specific feedback if possible
-      if (response.patientExplanation) {
-           return { type: 'error', message: 'Detected "patientExplanation" key in a response where it was not expected (should be in a separate call).' };
-      }
-      if (response.medicalRecord && typeof response.medicalRecord !== 'string') {
-           return { type: 'error', message: 'Detected "medicalRecord" key, but its value is not a string as expected for the final record.' };
-      }
-      if (Object.keys(response).length === 0) {
-          return { type: 'error', message: 'AI response is an empty object.'}
-      }
-      return { type: 'error', message: `Unexpected AI response format. Keys found: ${Object.keys(response).join(', ')}. Does not match expected question, readyForRecord, patientExplanation, or medicalRecord structure.` };
+    console.error("Unexpected AI response format received:", response);
+    if ('patientExplanation' in response) { // Check if 'patientExplanation' key exists
+         return { type: 'error', message: 'Detected "patientExplanation" key in a response where it was not expected (should be in a separate call).' };
     }
+    if ('medicalRecord' in response && typeof response.medicalRecord !== 'string') { // Check if 'medicalRecord' key exists and its type
+         return { type: 'error', message: 'Detected "medicalRecord" key, but its value is not a string as expected for the final record.' };
+    }
+    if (Object.keys(response).length === 0) {
+        return { type: 'error', message: 'AI response is an empty object.'}
+    }
+    return { type: 'error', message: `Unexpected AI response format. Keys found: ${Object.keys(response).join(', ')}. Does not match expected question, readyForRecord, patientExplanation, or medicalRecord structure.` };
+
   } catch (error) {
-    // Catch errors during parsing/validation
     console.error("Error parsing or validating AI response:", error);
-    if (error instanceof SyntaxError) { // Should ideally not happen if input 'response' is already parsed JSON
+    if (error instanceof SyntaxError) {
         return { type: 'error', message: `Failed to parse AI response as JSON: ${error.message}` };
     }
     return { type: 'error', message: `Failed to process AI response: ${error instanceof Error ? error.message : String(error)}` };

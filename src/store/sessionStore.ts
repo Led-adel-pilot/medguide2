@@ -3,12 +3,6 @@ import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 // Import the new interface
 import { PatientExplanationData } from '@/lib/utils/promptBuilder';
 
-// Define the structure for a single message in the conversation history
-interface HistoryMessage {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-}
-
 // Define the structure for a single question from the AI
 interface Question {
   id: string;
@@ -177,9 +171,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         throw new Error('Invalid initial response format from API. Expected questions.');
       }
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error starting session:", err);
-      set({ error: err.message || 'Failed to start session.', isSessionActive: false, isLoading: false });
+      const errorMessage = err instanceof Error ? err.message : 'Failed to start session.';
+      set({ error: errorMessage, isSessionActive: false, isLoading: false });
     } finally {
         // Ensure loading is always turned off
         set({ isLoading: false });
@@ -188,7 +183,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   submitAnswers: async (answers: Record<string, string>) => {
     // Use specific loaders now? Or keep general isLoading? Let's use general for now.
-    const { setError, _addHistory, _setQuestions, _setReadyForRecord, conversationHistory, currentQuestions } = get();
+    const { setError, _addHistory, _setQuestions, _setReadyForRecord, currentQuestions } = get();
 
     if (currentQuestions.length === 0) {
         console.warn("submitAnswers called with no current questions.");
@@ -244,9 +239,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         throw new Error('Invalid response format from API after submitting answers.');
       }
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error submitting answers:", err);
-      setError(err.message || 'Failed to process answers.');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to process answers.';
+      setError(errorMessage);
       set({ isLoading: false }); // Ensure loading is false on error
     }
     // setLoading(false) is handled within the actions now or in catch
@@ -254,7 +250,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   // New Action: Generate Patient Explanation
   generatePatientExplanation: async () => {
-      const { setError, _addHistory, _setPatientExplanation, conversationHistory, isReadyForRecord } = get();
+      const { setError, _addHistory, _setPatientExplanation, isReadyForRecord } = get();
 
       if (!isReadyForRecord) {
           console.warn("generatePatientExplanation called when not in ready state.");
@@ -299,9 +295,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               throw new Error('Invalid response format from API when generating patient explanation.');
           }
 
-      } catch (err: any) {
+      } catch (err: unknown) {
           console.error("Error generating patient explanation:", err);
-          setError(err.message || 'Failed to generate patient explanation.');
+          const errorMessage = err instanceof Error ? err.message : 'Failed to generate patient explanation.';
+          setError(errorMessage);
           set({ isGeneratingExplanation: false }); // Ensure loading is false on error
       }
   }, // End of generatePatientExplanation
@@ -310,7 +307,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // Updated Action: Generate Final Medical Record
   generateRecord: async () => {
     // Now depends on structuredPatientExplanation being present and needs initialData
-    const { setError, _addHistory, _setComplete, conversationHistory, structuredPatientExplanation, initialData } = get();
+    const { setError, _addHistory, _setComplete, structuredPatientExplanation, initialData } = get();
 
     if (!initialData) {
         console.error("generateRecord called but initialData is missing from state.");
@@ -361,9 +358,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         throw new Error('Invalid response format or missing medicalRecord string from API when generating record.');
       }
 
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error generating record:", err);
-      setError(err.message || 'Failed to generate record.');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to generate record.';
+      setError(errorMessage);
       set({ isGeneratingRecord: false }); // Ensure loading is false on error
     }
   }, // End of generateRecord

@@ -1,11 +1,12 @@
 import OpenAI from 'openai';
+import { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 
 const openai = new OpenAI({
   apiKey: process.env.GEMINI_API_KEY,
   baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/"
 });
 
-export async function getAIResponse(messages: any[]) {
+export async function getAIResponse(messages: ChatCompletionMessageParam[]) {
   try {
     const completion = await openai.chat.completions.create({
       model: "gemini-2.5-flash-preview-04-17",
