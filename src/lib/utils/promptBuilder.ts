@@ -286,7 +286,7 @@ export function buildGenerateRecordPrompt(history: ChatCompletionMessageParam[],
               ) {
                   return false; // Exclude this message
               }
-          } catch (_) {
+          } catch (_) { // eslint-disable-line @typescript-eslint/no-unused-vars
               // If parsing fails or it's not the specific JSON structure, keep it
           }
       }
