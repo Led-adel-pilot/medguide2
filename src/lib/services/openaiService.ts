@@ -9,7 +9,7 @@ const openai = new OpenAI({
 export async function getAIResponse(messages: ChatCompletionMessageParam[]) {
   try {
     const completion = await openai.chat.completions.create({
-      model: "gemini-2.5-flash-preview-04-17",
+      model: "gemini-2.0-flash",
       messages: messages,
       response_format: { type: "json_object" }, // Requesting JSON output
     });

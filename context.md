@@ -12,9 +12,13 @@ This web application is an AI-powered assistant designed to conduct a preliminar
 2.  **Start Session:** Upon submitting the initial data, a new session is started by calling the backend API. The patient's full name is stored locally and sent to the backend, but it is NOT included in the prompt sent to the AI for privacy reasons.
 3.  **Question & Answer Phase:** The application displays questions received from the AI. The user provides answers.
 4.  **Submit Answers:** User submits their answers, which are sent back to the API along with the conversation history. The AI processes the answers and either provides the next set of questions or signals readiness to conclude.
-5.  **Ready for Record:** When the AI determines it has enough information, it signals readiness. The UI automatically generates and displays the structured patient explanation.
-6.  **Generate Final Record:** Below the patient explanation, the UI presents a button to generate the final medical record (intended for a healthcare professional). The user clicks this button to make the final API call. The backend instructs the AI to use the placeholder `[PATIENT_FULL_NAME]` in the medical record.
-8.  **View Results:** Once the final record is generated, the session is marked complete. The application displays the structured patient explanation and a preview of the medical record, rendered as HTML. The backend replaces the `[PATIENT_FULL_NAME]` placeholder with the actual full name before displaying the record. A button is also available to download the raw medical record in Markdown format as a `.txt` file.
+5.  **Ready for Paraclinical Upload:** When the AI determines it has enough information from the conversation, it signals readiness. The UI transitions to a page prompting the user to upload paraclinical exam images. At this stage, the user also has the option to **skip the paraclinical upload** and proceed directly to generating the explanation & record.
+6.  **Paraclinical Exam Upload (Optional):** The user can upload relevant images (screenshots, scanned documents) of biological tests, radiology results, etc.
+7.  **Generate Patient Explanation & Record:**
+    *   If images were uploaded, upon submitting the images, the application calls the backend API to generate both the structured patient explanation and the final medical record, using the conversation history *and* the uploaded images as context for the AI.
+    *   If the user chose to skip the upload, the application calls the backend API to generate the explanation and record using only the conversation history.
+    *   The backend instructs the AI to use the placeholder `[PATIENT_FULL_NAME]` in the medical record.
+8.  **View Results:** Once the explanation and record are generated, the session is marked complete. The application displays the structured patient explanation and a preview of the medical record, rendered as HTML. The backend replaces the `[PATIENT_FULL_NAME]` placeholder with the actual full name before displaying the record. A button is also available to download the raw medical record in Markdown format as a `.txt` file.
 9.  **Reset Session:** The user can click a button to reset the session and start over.
 
 ## Tech Stack

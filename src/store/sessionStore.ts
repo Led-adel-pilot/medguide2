@@ -1,7 +1,24 @@
 import { create } from 'zustand';
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-// Import the new interface
-import { PatientExplanationData } from '@/lib/utils/promptBuilder';
+import {
+    buildInitialPrompt,
+    buildNextPrompt,
+    buildGeneratePatientExplanationPrompt,
+    buildGenerateRecordPrompt,
+    parseAIResponse, // Keep parseAIResponse import, it's used by the API route, not directly here anymore
+    PatientExplanationData
+} from '@/lib/utils/promptBuilder'; // Ensure all are imported
+
+// Define AppStep type
+export type AppStep =
+  | 'initial'
+  | 'anamnesis'
+  | 'paraclinicalUpload'
+  | 'generatingExplanation'
+  | 'viewExplanation'
+  | 'generatingRecord'
+  | 'viewResults'
+  | 'errorState';
 
 // Define the structure for a single question from the AI
 interface Question {
@@ -10,38 +27,35 @@ interface Question {
   suggestions?: string[];
 }
 
-// PatientExplanation interface from promptBuilder is imported above
-
-// Define the state structure (Updated)
+// Define the state structure (Updated for Images)
 interface SessionState {
-  conversationHistory: Array<Pick<ChatCompletionMessageParam, 'role' | 'content'>>;
+  conversationHistory: ChatCompletionMessageParam[];
   currentQuestions: Question[];
-  currentExplanation: string | null; // Explanation from AI during Q&A or readiness signal
+  currentExplanation: string | null;
   isLoading: boolean; // General loading for start/next steps
-  isGeneratingExplanation: boolean; // Specific loading for patient explanation step
-  isGeneratingRecord: boolean; // Specific loading for final record step
+  isGeneratingExplanation: boolean; // Kept for now, sync with currentAppStep
+  isGeneratingRecord: boolean; // Kept for now, sync with currentAppStep
   error: string | null;
-  isSessionActive: boolean;
+  isSessionActive: boolean; // Kept for now
   isComplete: boolean; // True only after final medical record is generated
-  isReadyForRecord: boolean; // True when AI signals readiness (first step)
-  structuredPatientExplanation: PatientExplanationData | null; // Store the structured explanation (second step)
-  medicalRecord: string | null; // Store the final medical record markdown string (third step)
-  initialData: { fullName: string; age: string; gender: string; complaint: string } | null; // Store initial data (Added fullName)
+  isReadyForRecord: boolean; // True when AI signals readiness for paraclinical upload
+  structuredPatientExplanation: PatientExplanationData | null;
+  medicalRecord: string | null;
+  initialData: { fullName: string; age: string; gender: string; complaint: string } | null;
+  paraclinicalImagesBase64: string[]; // Renamed state for base64 images
+  currentAppStep: AppStep; // New state for managing UI flow
 
-  // Define actions
-  startSession: (initialData: { fullName: string; age: string; gender: string; complaint: string }) => Promise<void>; // Updated signature
+  // Define actions (Updated for Images)
+  startSession: (initialData: { fullName: string; age: string; gender: string; complaint: string }) => Promise<void>;
   submitAnswers: (answers: Record<string, string>) => Promise<void>;
-  generatePatientExplanation: () => Promise<void>; // New action
-  generateRecord: () => Promise<void>;
-  setLoading: (loading: boolean) => void; // Consider removing if specific loaders are used
+  submitParaclinicalImages: (imagesBase64: string[]) => Promise<void>; // New action for images
+  generateRecord: () => Promise<void>; // Existing action, will be updated
+  generateResultsSkippingParaclinical: () => Promise<void>; // New action to skip paraclinical
   setError: (error: string | null) => void;
   resetSession: () => void;
-  // Internal actions updated
-  _setQuestions: (explanation: string, questions: Question[]) => void;
-  _addHistory: (message: Pick<ChatCompletionMessageParam, 'role' | 'content'>) => void;
-  _setReadyForRecord: (explanation?: string) => void; // Updated signature
-  _setPatientExplanation: (explanationData: PatientExplanationData) => void; // New internal action
-  _setComplete: (medicalRecord: string) => void;
+
+  // Internal helper actions
+  _addHistory: (message: ChatCompletionMessageParam) => void;
 }
 
 // Helper to create the user answer string
@@ -51,98 +65,62 @@ const formatUserAnswers = (answers: Record<string, string>, questions: Question[
       .join('\n\n');
 }
 
-
 // Create the store
 export const useSessionStore = create<SessionState>((set, get) => ({
-  // Initial state
+  // Initial state (Updated for Images)
   conversationHistory: [],
   currentQuestions: [],
   currentExplanation: null,
   isLoading: false,
-  isGeneratingExplanation: false, // Initialize new state
-  isGeneratingRecord: false, // Initialize new state
+  isGeneratingExplanation: false,
+  isGeneratingRecord: false,
   error: null,
   isSessionActive: false,
   isComplete: false,
   isReadyForRecord: false,
-  structuredPatientExplanation: null, // Initialize new state
+  structuredPatientExplanation: null,
   medicalRecord: null,
-  initialData: null, // Initialize initialData
+  initialData: null,
+  paraclinicalImagesBase64: [], // Initialize new state
+  currentAppStep: 'initial',
 
   // Actions implementations
-  setLoading: (loading: boolean) => set({ isLoading: loading }), // Keep for initial load?
-  setError: (error: string | null) => set({ error: error }),
-
-  _setQuestions: (explanation: string, questions: Question[]) => set({
-    currentExplanation: explanation,
-    currentQuestions: questions,
-    isLoading: false, // Stop general loading
-    isGeneratingExplanation: false,
-    isGeneratingRecord: false,
-    error: null,
-    isReadyForRecord: false, // Not ready if we just got questions
-    structuredPatientExplanation: null, // Clear any previous explanation if we get new questions
-    isComplete: false, // Not complete if we get new questions
-  }),
-
-  _addHistory: (message: Pick<ChatCompletionMessageParam, 'role' | 'content'>) => set((state) => ({
+  setError: (error: string | null) => set({ error: error, currentAppStep: 'errorState', isLoading: false, isGeneratingExplanation: false, isGeneratingRecord: false }),
+  _addHistory: (message: ChatCompletionMessageParam) => set((state) => ({
      conversationHistory: [...state.conversationHistory, message],
   })),
 
-  // Updated: Only sets readiness flag and optional explanation text
-  _setReadyForRecord: (explanation?: string) => set({
-    isReadyForRecord: true, // Signal readiness for the *next* step (patient explanation)
-    currentExplanation: explanation, // Use only the provided explanation (can be undefined)
-    currentQuestions: [], // Clear questions
-    isLoading: false, // Stop general loading
-    isGeneratingExplanation: false,
-    isGeneratingRecord: false,
-    error: null,
-    // structuredPatientExplanation remains null until generated
-  }),
-
-  // New: Sets the structured patient explanation
-   _setPatientExplanation: (explanationData: PatientExplanationData) => set({
-      structuredPatientExplanation: explanationData,
-      isGeneratingExplanation: false, // Stop explanation loading
-      isLoading: false,
-      error: null,
-      // isReadyForRecord remains true, isComplete remains false
-   }),
-
-  // Updated: Sets the final medical record and marks session complete
-  _setComplete: (medicalRecord: string) => set({
-    isComplete: true,
-    medicalRecord: medicalRecord, // Store the record string
-    isGeneratingRecord: false, // Stop record loading
-    isLoading: false,
-    error: null,
-    currentQuestions: [], // Clear questions when complete
-    // structuredPatientExplanation remains as it was set
-    isReadyForRecord: false, // No longer just 'ready'
-  }),
-
   resetSession: () => set({
-    initialData: null, // Reset initialData
+    initialData: null,
     conversationHistory: [],
     currentQuestions: [],
     currentExplanation: null,
     isLoading: false,
-    isGeneratingExplanation: false, // Reset new state
-    isGeneratingRecord: false, // Reset new state
+    isGeneratingExplanation: false,
+    isGeneratingRecord: false,
     error: null,
     isSessionActive: false,
     isComplete: false,
     isReadyForRecord: false,
-    structuredPatientExplanation: null, // Reset new state
+    structuredPatientExplanation: null,
     medicalRecord: null,
+    paraclinicalImagesBase64: [], // Reset image state
+    currentAppStep: 'initial',
   }),
 
-  // --- Actions involving API calls ---
-  startSession: async (initialData: { fullName: string; age: string; gender: string; complaint: string }) => { // Updated signature
+  startSession: async (initialData: { fullName: string; age: string; gender: string; complaint: string }) => {
     get().resetSession();
-    // Store initialData in the state
-    set({ isLoading: true, isSessionActive: true, error: null, initialData: initialData }); // initialData now includes fullName
+    set({
+        isLoading: true,
+        isSessionActive: true,
+        error: null,
+        initialData: initialData,
+        currentAppStep: 'anamnesis'
+    });
+    const { _addHistory } = get();
+    const initialMessages = buildInitialPrompt(initialData);
+    _addHistory(initialMessages[0]);
+    _addHistory(initialMessages[1]);
 
     try {
       const response = await fetch('/api/ai-session', {
@@ -150,222 +128,302 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'start',
+          history: get().conversationHistory,
           initialData: initialData,
         }),
       });
-
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
-
       const data = await response.json();
-
-      if (data.type === 'questions' && data.data.explanation && data.data.questions) {
-         get()._addHistory({ role: 'assistant', content: JSON.stringify(data.data) });
-         get()._setQuestions(data.data.explanation, data.data.questions);
+      if (data.type === 'questions' && data.data) {
+         _addHistory({ role: 'assistant', content: JSON.stringify(data.data) });
+        set({
+          currentQuestions: data.data.questions,
+          currentExplanation: data.data.explanation,
+          isLoading: false,
+          currentAppStep: 'anamnesis',
+        });
       } else if (data.type === 'error') {
-         throw new Error(data.message || 'API returned an error on initial call.');
+        throw new Error(data.error || 'Received an error response from the API.');
       } else {
-        console.error("Unexpected response type on initial call:", data);
-        throw new Error('Invalid initial response format from API. Expected questions.');
+        throw new Error('Invalid response format received from the API route.');
       }
-
     } catch (err: unknown) {
-      console.error("Error starting session:", err);
       const errorMessage = err instanceof Error ? err.message : 'Failed to start session.';
-      set({ error: errorMessage, isSessionActive: false, isLoading: false });
-    } finally {
-        // Ensure loading is always turned off
-        set({ isLoading: false });
+      set({ error: errorMessage, currentAppStep: 'errorState', isLoading: false, isSessionActive: false });
     }
   },
 
   submitAnswers: async (answers: Record<string, string>) => {
-    // Use specific loaders now? Or keep general isLoading? Let's use general for now.
-    const { setError, _addHistory, _setQuestions, _setReadyForRecord, currentQuestions } = get();
-
-    if (currentQuestions.length === 0) {
-        console.warn("submitAnswers called with no current questions.");
+    const { _addHistory, currentQuestions, initialData } = get();
+    if (currentQuestions.length === 0) return;
+    if (!initialData) {
+        set({ error: "Session not properly initialized.", currentAppStep: 'errorState' });
         return;
     }
-
-    set({ isLoading: true, error: null }); // Use general loader
-
+    set({ isLoading: true, error: null, currentAppStep: 'anamnesis' });
     const userAnswerContent = formatUserAnswers(answers, currentQuestions);
     _addHistory({ role: 'user', content: userAnswerContent });
+    const nextPromptMessages = buildNextPrompt(get().conversationHistory);
 
     try {
       const response = await fetch('/api/ai-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'next',
-          history: get().conversationHistory
-        }),
+        body: JSON.stringify({ action: 'next', history: nextPromptMessages }),
       });
-
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
-
-      const result = await response.json();
-
-      // Add raw response to history BEFORE processing it
-      // Check if result.data exists before stringifying
-       if (result.data) {
-           _addHistory({ role: 'assistant', content: JSON.stringify(result.data) });
-       } else if (result.type === 'error') {
-            // Don't add error messages themselves as assistant history? Or maybe do?
-            // Let's skip adding the error object itself to history for now.
-       }
-
-
-      if (result.type === 'questions') {
-        _setQuestions(result.data.explanation, result.data.questions);
-      } else if (result.type === 'readyForRecord') {
-        // Updated call: Pass only the optional explanation string
-        _setReadyForRecord(result.data.explanation);
-      } else if (result.type === 'patientExplanation' || result.type === 'medicalRecord') {
-         // Should not happen in 'next' action response
-         console.warn(`Received unexpected response type '${result.type}' during submitAnswers.`);
-         setError(`Received unexpected response type '${result.type}' during submitAnswers.`);
-         set({ isLoading: false }); // Stop loading on error/warning
-      } else if (result.type === 'error') {
-         throw new Error(result.message || 'API returned an error.');
+      const data = await response.json();
+      if (data.type === 'questions' && data.data) {
+        _addHistory({ role: 'assistant', content: JSON.stringify(data.data) });
+        set({
+          currentQuestions: data.data.questions,
+          currentExplanation: data.data.explanation,
+          isLoading: false,
+          currentAppStep: 'anamnesis',
+        });
+      } else if (data.type === 'readyForRecord' && data.data) {
+         _addHistory({ role: 'assistant', content: JSON.stringify(data.data) });
+        set({
+          isReadyForRecord: true,
+          currentExplanation: data.data.explanation,
+          currentQuestions: [],
+          isLoading: false,
+          currentAppStep: 'paraclinicalUpload',
+        });
+      } else if (data.type === 'error') {
+        throw new Error(data.error || 'Received an error response from the API during next step.');
       } else {
-        console.error("Invalid response type after submitting answers:", result);
-        throw new Error('Invalid response format from API after submitting answers.');
+        throw new Error('Invalid response format received from the API route during next step.');
       }
-
     } catch (err: unknown) {
-      console.error("Error submitting answers:", err);
       const errorMessage = err instanceof Error ? err.message : 'Failed to process answers.';
-      setError(errorMessage);
-      set({ isLoading: false }); // Ensure loading is false on error
+      set({ error: errorMessage, currentAppStep: 'errorState', isLoading: false });
     }
-    // setLoading(false) is handled within the actions now or in catch
-  }, // End of submitAnswers
+  },
 
-  // New Action: Generate Patient Explanation
-  generatePatientExplanation: async () => {
-      const { setError, _addHistory, _setPatientExplanation, isReadyForRecord } = get();
+  // New action for submitting images
+  submitParaclinicalImages: async (imagesBase64: string[]) => {
+    const { conversationHistory, initialData, _addHistory } = get();
+     if (!initialData) {
+        set({ error: "Session not properly initialized.", currentAppStep: 'errorState' });
+        return;
+    }
+    // Store the base64 images in the state first
+    set({
+        paraclinicalImagesBase64: imagesBase64,
+        isLoading: true,
+        isGeneratingExplanation: true,
+        error: null,
+        currentAppStep: 'generatingExplanation'
+    });
+    // Add a user message to history indicating images were submitted
+    _addHistory({ role: 'user', content: `[User submitted ${imagesBase64.length} paraclinical image(s)]` });
+    // Pass the images to the prompt builder
+    // Ensure the correct state property is accessed here
+    const currentImages = get().paraclinicalImagesBase64;
+    const promptMessages = buildGeneratePatientExplanationPrompt(conversationHistory, currentImages);
 
-      if (!isReadyForRecord) {
-          console.warn("generatePatientExplanation called when not in ready state.");
-          setError("Cannot generate patient explanation yet. AI has not indicated readiness.");
-          return;
-      }
+    try {
+        const response = await fetch('/api/ai-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'generatePatientExplanation', // Correct action string
+                history: promptMessages,
+                images: currentImages // Send images in the body
+            }),
+        });
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `API Error generating explanation: ${response.statusText}`);
+        }
+        const data = await response.json();
+        if (data.type === 'patientExplanation' && data.data) {
+             _addHistory({ role: 'assistant', content: JSON.stringify(data.data) });
+            set({
+                structuredPatientExplanation: data.data,
+                isLoading: false,
+                isGeneratingExplanation: false,
+                currentAppStep: 'viewExplanation',
+                currentQuestions: [],
+            });
+        } else if (data.type === 'error') {
+            throw new Error(data.error || 'Received an error response from the API generating explanation.');
+        } else {
+            throw new Error('Invalid response format received from the API route generating explanation.');
+        }
+    } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to generate patient explanation.';
+        set({ error: errorMessage, currentAppStep: 'errorState', isLoading: false, isGeneratingExplanation: false });
+    }
+  },
 
-      set({ isGeneratingExplanation: true, error: null }); // Use specific loader
-
-      // Optional: Add a user message to history indicating this step was triggered
-      // _addHistory({ role: 'user', content: "User requested patient explanation generation." });
-
-      try {
-          const response = await fetch('/api/ai-session', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                  action: 'generatePatientExplanation', // New action type
-                  history: get().conversationHistory // Send history up to this point
-              }),
-          });
-
-          if (!response.ok) {
-              const errorData = await response.json();
-              throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-          }
-
-          const result = await response.json(); // Expected: { type: 'patientExplanation', data: PatientExplanationData }
-
-          // Add the explanation JSON itself to history
-          if (result.data) {
-              _addHistory({ role: 'assistant', content: JSON.stringify(result.data) });
-          }
-
-          if (result.type === 'patientExplanation' && result.data) {
-              // Validate structure maybe? For now, trust the parser/API
-              _setPatientExplanation(result.data as PatientExplanationData);
-          } else if (result.type === 'error') {
-              throw new Error(result.message || 'API returned an error during patient explanation generation.');
-          } else {
-              console.error("Unexpected response type or structure during generatePatientExplanation:", result);
-              throw new Error('Invalid response format from API when generating patient explanation.');
-          }
-
-      } catch (err: unknown) {
-          console.error("Error generating patient explanation:", err);
-          const errorMessage = err instanceof Error ? err.message : 'Failed to generate patient explanation.';
-          setError(errorMessage);
-          set({ isGeneratingExplanation: false }); // Ensure loading is false on error
-      }
-  }, // End of generatePatientExplanation
-
-
-  // Updated Action: Generate Final Medical Record
-  generateRecord: async () => {
-    // Now depends on structuredPatientExplanation being present and needs initialData
-    const { setError, _addHistory, _setComplete, structuredPatientExplanation, initialData } = get();
+  generateResultsSkippingParaclinical: async () => {
+    const { conversationHistory, initialData, _addHistory, generateRecord } = get(); // Get generateRecord to call it later
 
     if (!initialData) {
-        console.error("generateRecord called but initialData is missing from state.");
-        setError("Cannot generate final record: Initial patient data is missing.");
-        return;
+      set({ error: "Session not properly initialized.", currentAppStep: 'errorState' });
+      return;
     }
 
+    set({
+      isLoading: true,
+      isGeneratingExplanation: true,
+      error: null,
+      currentAppStep: 'generatingExplanation',
+      paraclinicalImagesBase64: [], // Ensure images are empty
+    });
+
+    _addHistory({ role: 'user', content: `[User chose to skip paraclinical data upload]` });
+
+    // 1. Generate Patient Explanation (without images)
+    const explanationPromptMessages = buildGeneratePatientExplanationPrompt(conversationHistory, []); // Empty array for images
+
+    try {
+      const explanationResponse = await fetch('/api/ai-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'generatePatientExplanation',
+          history: explanationPromptMessages,
+          images: [], // Explicitly send empty array
+        }),
+      });
+
+      if (!explanationResponse.ok) {
+        const errorData = await explanationResponse.json();
+        throw new Error(errorData.error || `API Error generating explanation (skipped paraclinical): ${explanationResponse.statusText}`);
+      }
+
+      const explanationData = await explanationResponse.json();
+      if (explanationData.type === 'patientExplanation' && explanationData.data) {
+        _addHistory({ role: 'assistant', content: JSON.stringify(explanationData.data) });
+        set({
+          structuredPatientExplanation: explanationData.data,
+          isLoading: false, // Stop loading for explanation part
+          isGeneratingExplanation: false,
+          currentAppStep: 'viewExplanation', // Temporarily to show explanation if needed, or directly to generatingRecord
+          currentQuestions: [],
+        });
+
+        // 2. Automatically proceed to generate record (without images)
+        // We need to ensure generateRecord uses an empty image array
+        // For simplicity, we'll adapt the existing generateRecord or make it aware of this flow.
+        // For now, let's call a modified version of the generateRecord logic directly.
+
+        set({
+            isLoading: true, // Start loading for record part
+            isGeneratingRecord: true,
+            error: null,
+            currentAppStep: 'generatingRecord'
+        });
+
+        const recordPromptMessages = buildGenerateRecordPrompt(get().conversationHistory, initialData, []); // Empty array for images
+
+        const recordResponse = await fetch('/api/ai-session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'generateRecord',
+              history: recordPromptMessages,
+              initialData: initialData,
+              images: [], // Explicitly send empty array
+            }),
+        });
+
+        if (!recordResponse.ok) {
+            const errorData = await recordResponse.json();
+            throw new Error(errorData.error || `API Error generating record (skipped paraclinical): ${recordResponse.statusText}`);
+        }
+
+        const recordData = await recordResponse.json();
+        if (recordData.type === 'medicalRecord' && recordData.data) {
+            _addHistory({ role: 'assistant', content: JSON.stringify(recordData.data) });
+            set({
+              medicalRecord: recordData.data.medicalRecord,
+              isComplete: true,
+              isLoading: false,
+              isGeneratingRecord: false,
+              currentAppStep: 'viewResults',
+            });
+        } else if (recordData.type === 'error') {
+            throw new Error(recordData.error || 'Received an error response from the API generating record (skipped paraclinical).');
+        } else {
+            throw new Error('Invalid response format received from the API route generating record (skipped paraclinical).');
+        }
+
+      } else if (explanationData.type === 'error') {
+        throw new Error(explanationData.error || 'Received an error response from the API generating explanation (skipped paraclinical).');
+      } else {
+        throw new Error('Invalid response format received from the API route generating explanation (skipped paraclinical).');
+      }
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to generate results skipping paraclinical data.';
+      set({ error: errorMessage, currentAppStep: 'errorState', isLoading: false, isGeneratingExplanation: false, isGeneratingRecord: false });
+    }
+  },
+
+  generateRecord: async () => {
+    // Use paraclinicalImagesBase64
+    const { conversationHistory, initialData, structuredPatientExplanation, paraclinicalImagesBase64, _addHistory } = get();
+    if (!initialData) {
+      set({ error: "Cannot generate final record: Initial patient data is missing.", currentAppStep: 'errorState' });
+      return;
+    }
     if (!structuredPatientExplanation) {
-        console.warn("generateRecord called before patient explanation was generated.");
-        setError("Cannot generate final record until patient explanation is available.");
-        return;
+      set({ error: "Cannot generate final record until patient explanation is available.", currentAppStep: 'errorState' });
+      return;
     }
-
-    set({ isGeneratingRecord: true, error: null }); // Use specific loader
-
-    // Optional: Add user message to history
-    // _addHistory({ role: 'user', content: "User requested final medical record generation." });
+    set({
+        isLoading: true,
+        isGeneratingRecord: true,
+        error: null,
+        currentAppStep: 'generatingRecord'
+    });
+    // Pass images to the prompt builder
+    const recordPromptMessages = buildGenerateRecordPrompt(conversationHistory, initialData, paraclinicalImagesBase64);
 
     try {
       const response = await fetch('/api/ai-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'generateRecord', // Action remains the same
-          history: get().conversationHistory, // Send full history including the patient explanation assistant message
-          initialData: initialData // Include initialData in the request body
+          action: 'generateRecord',
+          history: recordPromptMessages,
+          initialData: initialData,
+          images: paraclinicalImagesBase64 // Send images in the body
         }),
       });
-
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
-
-      const result = await response.json(); // Expected: { type: 'medicalRecord', data: { medicalRecord: "..." } }
-
-       // Add the final record JSON to history
-       if (result.data) {
-           _addHistory({ role: 'assistant', content: JSON.stringify(result.data) });
-       }
-
-      if (result.type === 'medicalRecord' && typeof result.data?.medicalRecord === 'string') {
-        _setComplete(result.data.medicalRecord);
-      } else if (result.type === 'error') {
-         throw new Error(result.message || 'API returned an error during record generation.');
+      const data = await response.json();
+      if (data.type === 'medicalRecord' && data.data) {
+        _addHistory({ role: 'assistant', content: JSON.stringify(data.data) });
+        set({
+          medicalRecord: data.data.medicalRecord,
+          isComplete: true,
+          isLoading: false,
+          isGeneratingRecord: false,
+          currentAppStep: 'viewResults',
+        });
+      } else if (data.type === 'error') {
+        throw new Error(data.error || 'Received an error response from the API generating record.');
       } else {
-        console.error("Unexpected response type or structure during generateRecord:", result);
-        throw new Error('Invalid response format or missing medicalRecord string from API when generating record.');
+        throw new Error('Invalid response format received from the API route generating record.');
       }
-
     } catch (err: unknown) {
-      console.error("Error generating record:", err);
-      const errorMessage = err instanceof Error ? err.message : 'Failed to generate record.';
-      setError(errorMessage);
-      set({ isGeneratingRecord: false }); // Ensure loading is false on error
+      const errorMessage = err instanceof Error ? err.message : 'Failed to generate medical record.';
+      set({ error: errorMessage, currentAppStep: 'errorState', isLoading: false, isGeneratingRecord: false });
     }
-  }, // End of generateRecord
+  },
 }));
 
-// Export the new interface type if needed elsewhere (optional)
-export type { PatientExplanationData };
+// AppStep is exported at the top

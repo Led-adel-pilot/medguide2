@@ -4,7 +4,7 @@ import { getAIResponse } from '@/lib/services/openaiService';
 import {
     buildInitialPrompt,
     buildNextPrompt,
-    buildGeneratePatientExplanationPrompt, // Import new builder
+    buildGeneratePatientExplanationPrompt,
     buildGenerateRecordPrompt,
     parseAIResponse
 } from '@/lib/utils/promptBuilder';
@@ -33,11 +33,13 @@ interface NextRequest extends BaseRequest {
 interface GeneratePatientExplanationRequest extends BaseRequest {
     action: 'generatePatientExplanation';
     history: ChatCompletionMessageParam[];
+    images?: string[]; // Optional base64 image strings
 }
 
 interface GenerateRecordRequest extends BaseRequest {
     action: 'generateRecord';
     history: ChatCompletionMessageParam[];
+    images?: string[]; // Optional base64 image strings
     initialData: {
         fullName: string;
         age: string;
@@ -65,22 +67,37 @@ function isNextRequest(body: unknown): body is NextRequest {
 }
 
 function isGeneratePatientExplanationRequest(body: unknown): body is GeneratePatientExplanationRequest {
-    return typeof body === 'object' && body !== null &&
+    const check = typeof body === 'object' && body !== null &&
            'action' in body && (body as {action: unknown}).action === 'generatePatientExplanation' &&
            'history' in body && Array.isArray((body as {history: unknown}).history) &&
-           ((body as GeneratePatientExplanationRequest).history as ChatCompletionMessageParam[]).length > 0;
+           ((body as GeneratePatientExplanationRequest).history as ChatCompletionMessageParam[]).length > 0 &&
+           // Check for optional images array
+           (!('images' in body) || (Array.isArray((body as {images: unknown}).images) && (body as {images: string[]}).images.every(img => typeof img === 'string')));
+    return check;
 }
 
 function isGenerateRecordRequest(body: unknown): body is GenerateRecordRequest {
-    return typeof body === 'object' && body !== null &&
+    const check = typeof body === 'object' && body !== null &&
            'action' in body && (body as {action: unknown}).action === 'generateRecord' &&
            'history' in body && Array.isArray((body as {history: unknown}).history) &&
            ((body as GenerateRecordRequest).history as ChatCompletionMessageParam[]).length > 0 &&
+           // Check for optional images array
+           (!('images' in body) || (Array.isArray((body as {images: unknown}).images) && (body as {images: string[]}).images.every(img => typeof img === 'string'))) &&
            'initialData' in body && typeof (body as {initialData: unknown}).initialData === 'object' && (body as {initialData: object | null}).initialData !== null &&
            typeof ((body as GenerateRecordRequest).initialData as {fullName: unknown}).fullName === 'string' &&
            typeof ((body as GenerateRecordRequest).initialData as {age: unknown}).age === 'string' &&
            typeof ((body as GenerateRecordRequest).initialData as {gender: unknown}).gender === 'string' &&
            typeof ((body as GenerateRecordRequest).initialData as {complaint: unknown}).complaint === 'string';
+    return check;
+}
+
+// Helper to log character codes
+function logCharCodes(str: string, label: string) {
+    const codes = [];
+    for (let i = 0; i < str.length; i++) {
+        codes.push(str.charCodeAt(i));
+    }
+    console.log(`${label} (length ${str.length}) char codes: [${codes.join(', ')}]`);
 }
 
 
@@ -88,70 +105,108 @@ export async function POST(request: Request) {
   try {
     const body: unknown = await request.json();
 
-    let messages: ChatCompletionMessageParam[];
+    let messages: ChatCompletionMessageParam[] | undefined = undefined;
     let expectedResponseType: 'questions' | 'readyForRecord' | 'patientExplanation' | 'medicalRecord' | 'any' = 'any';
     let fullName = '';
 
     if (typeof body !== 'object' || body === null || !('action' in body) || typeof (body as {action: unknown}).action !== 'string') {
         return NextResponse.json({ error: 'Invalid request body: missing or invalid action.' }, { status: 400 });
     }
-    const action = (body as BaseRequest).action;
 
-    switch (action) {
-      case 'start':
+    // Trim the action string to remove potential leading/trailing whitespace
+    let action = (body as BaseRequest).action.trim();
+
+    console.log("API Route received action (trimmed):", action);
+    logCharCodes(action, "Received action"); // Log char codes for received action
+    logCharCodes('generatePatientExplanation', "Literal 'generatePatientExplanation'"); // Log char codes for literal
+
+    // Using if/else if for clarity during debugging
+    console.log(`Checking if action === 'start' (${action === 'start'})`);
+    if (action === 'start') {
+        console.log("Entered 'start' block");
         if (!isStartRequest(body)) {
+            console.log("Validation failed for 'start'");
             return NextResponse.json({ error: 'Invalid request body for action="start". Required: { action: "start", initialData: { fullName, age, gender, complaint } }.' }, { status: 400 });
         }
         messages = buildInitialPrompt(body.initialData);
         expectedResponseType = 'questions';
-        break;
+    } else {
+        console.log(`Checking if action === 'next' (${action === 'next'})`);
+        if (action === 'next') {
+            console.log("Entered 'next' block");
+            if (!isNextRequest(body)) {
+                 console.log("Validation failed for 'next'");
+                return NextResponse.json({ error: 'Invalid request body for action="next". Required: { action: "next", history: [...] } (history must not be empty).' }, { status: 400 });
+            }
+            messages = buildNextPrompt(body.history);
+            expectedResponseType = 'any';
+        } else {
+             // Try comparing using localeCompare as well
+             const isGenerateExplanation = action.localeCompare('generatePatientExplanation') === 0;
+             console.log(`Checking if action.localeCompare('generatePatientExplanation') === 0 (${isGenerateExplanation})`);
 
-      case 'next':
-        if (!isNextRequest(body)) {
-            return NextResponse.json({ error: 'Invalid request body for action="next". Required: { action: "next", history: [...] } (history must not be empty).' }, { status: 400 });
+             if (isGenerateExplanation) { // Use localeCompare result
+                 console.log("Entered 'generatePatientExplanation' block");
+                 if (!isGeneratePatientExplanationRequest(body)) {
+                      console.log("Validation failed for 'generatePatientExplanation'");
+                     return NextResponse.json({ error: 'Invalid request body for action="generatePatientExplanation". Required: { action: "generatePatientExplanation", history: [...], images?: [...] } (history must not be empty).' }, { status: 400 });
+                 }
+                messages = buildGeneratePatientExplanationPrompt(body.history, body.images);
+                expectedResponseType = 'patientExplanation';
+            } else {
+                 console.log(`Checking if action === 'generateRecord' (${action === 'generateRecord'})`);
+                 if (action === 'generateRecord') {
+                     console.log("Entered 'generateRecord' block");
+                      if (!isGenerateRecordRequest(body)) {
+                           console.log("Validation failed for 'generateRecord'");
+                          return NextResponse.json({ error: 'Invalid request body for action="generateRecord". Required: { action: "generateRecord", history: [...], initialData: { fullName, age, gender, complaint }, images?: [...] } (history must not be empty).' }, { status: 400 });
+                      }
+                     fullName = body.initialData.fullName;
+                     messages = buildGenerateRecordPrompt(body.history, body.initialData, body.images);
+                     console.log("--- Full Prompt for Generate Record ---");
+                     console.log(`Prompt includes ${messages.length} messages. Last message content type: ${typeof messages[messages.length - 1].content}`);
+                     console.log("---------------------------------------");
+                     expectedResponseType = 'medicalRecord';
+                } else {
+                    // Default case if action doesn't match known values
+                    console.error(`Invalid action received (final else): ${action}`);
+                    return NextResponse.json({ error: `Invalid action field. Received: ${action}` }, { status: 400 });
+                }
+            }
         }
-        messages = buildNextPrompt(body.history);
-        expectedResponseType = 'any';
-        break;
+    }
 
-      case 'generatePatientExplanation':
-         if (!isGeneratePatientExplanationRequest(body)) {
-             return NextResponse.json({ error: 'Invalid request body for action="generatePatientExplanation". Required: { action: "generatePatientExplanation", history: [...] } (history must not be empty).' }, { status: 400 });
-         }
-        messages = buildGeneratePatientExplanationPrompt(body.history);
-        expectedResponseType = 'patientExplanation';
-        break;
 
-       case 'generateRecord':
-          if (!isGenerateRecordRequest(body)) {
-              return NextResponse.json({ error: 'Invalid request body for action="generateRecord". Required: { action: "generateRecord", history: [...], initialData: { fullName, age, gender, complaint } } (history must not be empty).' }, { status: 400 });
-          }
-         fullName = body.initialData.fullName;
-         messages = buildGenerateRecordPrompt(body.history, body.initialData);
-         console.log("--- Full Prompt for Generate Record ---");
-         console.log(JSON.stringify(messages, null, 2));
-         console.log("---------------------------------------");
-         expectedResponseType = 'medicalRecord';
-         break;
-
-      default:
-        return NextResponse.json({ error: `Invalid action field. Received: ${action}` }, { status: 400 });
+    // Check if messages were assigned (should always happen if action is valid and validation passes)
+    if (!messages) {
+         console.error(`Message generation failed for action: ${action}. This should not happen if validation passed.`);
+         return NextResponse.json({ error: 'Internal server error: Failed to generate AI prompt.' }, { status: 500 });
     }
 
     const aiResponseRaw = await getAIResponse(messages);
 
-    if (aiResponseRaw && typeof aiResponseRaw === 'object' && 'type' in aiResponseRaw && aiResponseRaw.type === 'error' && 'message' in aiResponseRaw && aiResponseRaw.message === 'Failed to parse AI response as JSON.') {
-        const errorDetails = aiResponseRaw as { details?: unknown, rawContent?: unknown };
-        console.error("AI response JSON parsing failed in openaiService:", errorDetails.details, "\nRaw AI Response Content:", errorDetails.rawContent);
+    // Check if the response from getAIResponse is a structured error object
+    if (aiResponseRaw && typeof aiResponseRaw === 'object' && 'type' in aiResponseRaw && aiResponseRaw.type === 'error') { // Simplified check
+        const serviceError = aiResponseRaw as { type: 'error', message: string, details?: unknown, rawContent?: unknown };
+
+        // Log the specific error from the service
+        console.error(`Error received from getAIResponse for action "${action}":`, serviceError);
+
+        // Check if the detailed error is an OpenAI APIError to get status code
+        let statusCode = 500;
+        if (serviceError.details instanceof OpenAI.APIError) {
+            statusCode = serviceError.details.status || 500;
+        }
+
         return NextResponse.json({
             type: 'error',
-            error: 'Failed to parse AI response from service.',
-            details: errorDetails.details,
-            rawContent: errorDetails.rawContent
-        }, { status: 500 });
+            error: serviceError.message || 'Error from AI service.', // Use message from service error
+            details: serviceError.details // Pass along details if available
+        }, { status: statusCode });
     }
 
-    const parsedResponse = parseAIResponse(aiResponseRaw as string | Record<string, unknown>);
+
+    const parsedResponse = parseAIResponse(aiResponseRaw); // Pass the raw response directly
 
     if (parsedResponse.type === 'error') {
       console.error(`Error parsing AI response structure for action "${action}":`, parsedResponse.message, "\nRaw AI Response:", JSON.stringify(aiResponseRaw, null, 2));
@@ -167,13 +222,21 @@ export async function POST(request: Request) {
         }, { status: 500 });
     }
 
-    if (action === 'generateRecord' && isGenerateRecordRequest(body) && parsedResponse.type === 'medicalRecord' && typeof parsedResponse.data?.medicalRecord === 'string') {
-        const placeholder = '[PATIENT_FULL_NAME]';
-        const finalRecord = parsedResponse.data.medicalRecord.replace(new RegExp(placeholder.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g'), fullName);
-        if (parsedResponse.data) { // Ensure data exists before assigning
-            parsedResponse.data.medicalRecord = finalRecord;
+    // Replace placeholder in the final record
+    if (action === 'generateRecord' && parsedResponse.type === 'medicalRecord' && typeof parsedResponse.data?.medicalRecord === 'string') {
+        // Ensure body is narrowed correctly to access initialData.fullName safely
+        if (isGenerateRecordRequest(body)) {
+            const placeholder = '[PATIENT_FULL_NAME]';
+            // Use fullName captured earlier
+            const finalRecord = parsedResponse.data.medicalRecord.replace(new RegExp(placeholder.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'), 'g'), fullName);
+            if (parsedResponse.data) {
+                parsedResponse.data.medicalRecord = finalRecord;
+            }
+            console.log(`Replaced "${placeholder}" with patient's name in medical record.`);
+        } else {
+             console.error("Type guard failed unexpectedly within generateRecord action after successful switch case.");
+             // Handle this inconsistency? Maybe return an error.
         }
-        console.log(`Replaced "${placeholder}" with "${fullName}" in medical record.`);
     }
 
     return NextResponse.json({
@@ -191,6 +254,7 @@ export async function POST(request: Request) {
         statusCode = 400;
         console.error("Request Body Parsing Error:", error);
     } else if (error instanceof OpenAI.APIError) {
+        // This might catch errors during the initial request.json() if the APIError bubbles up that far
         console.error("OpenAI API Error:", error);
         errorMessage = `AI service error: ${error.message}`;
         statusCode = error.status || 500;
