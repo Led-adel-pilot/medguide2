@@ -114,7 +114,7 @@ export async function POST(request: Request) {
     }
 
     // Trim the action string to remove potential leading/trailing whitespace
-    let action = (body as BaseRequest).action.trim();
+    const action = (body as BaseRequest).action.trim();
 
     console.log("API Route received action (trimmed):", action);
     logCharCodes(action, "Received action"); // Log char codes for received action

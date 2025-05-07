@@ -310,6 +310,7 @@ Initial Patient Information (if available):
               ) {
                   return false; // Exclude this message
               }
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
           } catch (_) { /* Ignore parsing errors */ }
       }
       return true; // Keep other messages

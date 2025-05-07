@@ -5,6 +5,7 @@ import {
     buildNextPrompt,
     buildGeneratePatientExplanationPrompt,
     buildGenerateRecordPrompt,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     parseAIResponse, // Keep parseAIResponse import, it's used by the API route, not directly here anymore
     PatientExplanationData
 } from '@/lib/utils/promptBuilder'; // Ensure all are imported
@@ -265,7 +266,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   generateResultsSkippingParaclinical: async () => {
-    const { conversationHistory, initialData, _addHistory, generateRecord } = get(); // Get generateRecord to call it later
+    const { conversationHistory, initialData, _addHistory } = get(); // generateRecord removed as it's not used in this action
 
     if (!initialData) {
       set({ error: "Session not properly initialized.", currentAppStep: 'errorState' });
