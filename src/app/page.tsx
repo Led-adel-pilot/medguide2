@@ -134,7 +134,23 @@ export default function Home() {
   };
 
   const handleSuggestionClick = (questionId: string, suggestion: string) => {
-    setCurrentAnswers(prev => ({ ...prev, [questionId]: suggestion }));
+    setCurrentAnswers(prev => {
+      const existingAnswer = prev[questionId]?.trim() || '';
+      let processedSuggestion = suggestion;
+
+      // Lowercase the first letter of the original suggestion
+      if (processedSuggestion.length > 0) {
+        processedSuggestion = processedSuggestion.charAt(0).toLowerCase() + processedSuggestion.slice(1);
+      }
+
+      if (existingAnswer) {
+        // Prepend comma and space if there's an existing answer
+        return { ...prev, [questionId]: `${existingAnswer}, ${processedSuggestion}` };
+      } else {
+        // Otherwise, use the lowercased suggestion directly
+        return { ...prev, [questionId]: processedSuggestion };
+      }
+    });
   };
 
   const handleSubmitAnswers = async () => {
