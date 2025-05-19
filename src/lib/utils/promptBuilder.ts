@@ -56,12 +56,12 @@ When asking questions, the JSON object MUST have this structure:
 {
   "explanation": "A brief, reassuring explanation of the current step or why you're asking these questions.",
   "questions": [
-    { "id": "qN", "text": "The question text.", "suggestions": ["Suggestion 1", "Suggestion 2", "..."] },
-    { "id": "qN+1", "text": "Another question text.", "suggestions": ["...", "..."] }
+    { "id": "qN", "text": "The single question text.", "suggestions": ["Suggestion 1", "Suggestion 2", "..."] }
   ]
 }
 \`\`\`
-- Each question MUST have a unique \`id\` (e.g., "q1", "q2").
+- The \`questions\` array MUST contain exactly one question object.
+- The question object MUST have a unique \`id\` (e.g., "q1").
 - Include relevant \`suggestions\` as an array of strings to help the user answer.
 
 **Output Format for Signaling Readiness to Conclude:**
