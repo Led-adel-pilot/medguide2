@@ -134,7 +134,18 @@ export default function Home() {
   };
 
   const handleSuggestionClick = (questionId: string, suggestion: string) => {
-    setCurrentAnswers(prev => ({ ...prev, [questionId]: suggestion }));
+    setCurrentAnswers(prev => {
+      const existingAnswer = prev[questionId] || '';
+      const trimmedExistingAnswer = existingAnswer.trim(); // Check existing answer
+      let newAnswer;
+      if (trimmedExistingAnswer) { // If there IS existing text
+        const processedSuggestion = suggestion.charAt(0).toLowerCase() + suggestion.slice(1);
+        newAnswer = existingAnswer + ", " + processedSuggestion;
+      } else { // If text area is EMPTY
+        newAnswer = suggestion; // Use suggestion as is
+      }
+      return { ...prev, [questionId]: newAnswer };
+    });
   };
 
   const handleSubmitAnswers = async () => {

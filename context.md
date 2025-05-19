@@ -10,8 +10,8 @@ This web application is an AI-powered assistant designed to conduct a preliminar
 
 1.  **Welcome & Initial Input:** The user is presented with a welcome screen and a form to enter their full name, age, gender, and initial complaint.
 2.  **Start Session:** Upon submitting the initial data, a new session is started by calling the backend API. The patient's full name is stored locally and sent to the backend, but it is NOT included in the prompt sent to the AI for privacy reasons.
-3.  **Question & Answer Phase:** The application displays questions received from the AI. The user provides answers.
-4.  **Submit Answers:** User submits their answers, which are sent back to the API along with the conversation history. The AI processes the answers and either provides the next set of questions or signals readiness to conclude.
+3.  **Question & Answer Phase:** The application displays a single question at a time received from the AI. The user provides an answer to the current question.
+4.  **Submit Answers:** User submits their answer, which is sent back to the API along with the conversation history. The AI processes the answer and either provides the next single question or signals readiness to conclude the questioning phase.
 5.  **Ready for Paraclinical Upload:** When the AI determines it has enough information from the conversation, it signals readiness. The UI transitions to a page prompting the user to upload paraclinical exam images. At this stage, the user also has the option to **skip the paraclinical upload** and proceed directly to generating the explanation & record.
 6.  **Paraclinical Exam Upload (Optional):** The user can upload relevant images (screenshots, scanned documents) of biological tests, radiology results, etc.
 7.  **Generate Patient Explanation & Record:**
