@@ -167,8 +167,8 @@ export default function Home() {
   };
 
   return (
-    <div className="flex flex-col items-center min-h-screen p-4 sm:p-6 md:p-8 bg-muted/40">
-      <div className="w-full max-w-3xl space-y-8">
+    <div className="flex flex-col items-center min-h-screen p-6 sm:p-8 md:p-10 bg-muted/40">
+      <div className="w-full max-w-3xl space-y-10">
 
         {/* Welcome Section */}
         {currentAppStep === 'initial' && (

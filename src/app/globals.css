@@ -117,7 +117,10 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground leading-relaxed;
+  }
+  button, input, textarea, select, [role='button'], a {
+    @apply transition-all duration-150 ease-in-out;
   }
 }
 
