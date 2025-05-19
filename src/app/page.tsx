@@ -135,21 +135,16 @@ export default function Home() {
 
   const handleSuggestionClick = (questionId: string, suggestion: string) => {
     setCurrentAnswers(prev => {
-      const existingAnswer = prev[questionId]?.trim() || '';
-      let processedSuggestion = suggestion;
-
-      // Lowercase the first letter of the original suggestion
-      if (processedSuggestion.length > 0) {
-        processedSuggestion = processedSuggestion.charAt(0).toLowerCase() + processedSuggestion.slice(1);
+      const existingAnswer = prev[questionId] || '';
+      const trimmedExistingAnswer = existingAnswer.trim(); // Check existing answer
+      let newAnswer;
+      if (trimmedExistingAnswer) { // If there IS existing text
+        const processedSuggestion = suggestion.charAt(0).toLowerCase() + suggestion.slice(1);
+        newAnswer = existingAnswer + ", " + processedSuggestion;
+      } else { // If text area is EMPTY
+        newAnswer = suggestion; // Use suggestion as is
       }
-
-      if (existingAnswer) {
-        // Prepend comma and space if there's an existing answer
-        return { ...prev, [questionId]: `${existingAnswer}, ${processedSuggestion}` };
-      } else {
-        // Otherwise, use the lowercased suggestion directly
-        return { ...prev, [questionId]: processedSuggestion };
-      }
+      return { ...prev, [questionId]: newAnswer };
     });
   };
 
