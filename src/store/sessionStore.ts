@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+// import { ChatCompletionMessageParam } from "openai/resources/chat/completions"; // Already part of Consultation
 import {
     buildInitialPrompt,
     buildNextPrompt,
@@ -7,10 +7,10 @@ import {
     buildGenerateRecordPrompt,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     parseAIResponse, // Keep parseAIResponse import, it's used by the API route, not directly here anymore
-    PatientExplanationData
+    // PatientExplanationData // Already part of Consultation
 } from '@/lib/utils/promptBuilder'; // Ensure all are imported
 
-// Define AppStep type
+// Placeholder types (copied from localStorageManager.ts for this subtask)
 export type AppStep =
   | 'initial'
   | 'anamnesis'
@@ -21,15 +21,39 @@ export type AppStep =
   | 'viewResults'
   | 'errorState';
 
-// Define the structure for a single question from the AI
-interface Question {
+export interface Question { id: string; text: string; suggestions?: string[]; }
+export interface PatientExplanationData { mostProbableDiagnosis?: string[]; advice?: string; recommendedSpecialists?: string[]; }
+export interface ChatCompletionMessageParam { role: 'user' | 'assistant' | 'system'; content: string; }
+
+export interface Consultation {
   id: string;
-  text: string;
-  suggestions?: string[];
+  startTime: number;
+  lastUpdated: number;
+  status: 'in-progress' | 'completed' | 'abandoned';
+  currentAppStep: AppStep;
+  conversationHistory: ChatCompletionMessageParam[];
+  currentQuestions: Question[];
+  currentExplanation: string | null;
+  structuredPatientExplanation: PatientExplanationData | null;
+  medicalRecord: string | null;
+  initialData: { fullName: string; age: string; gender: string; complaint: string } | null;
+  paraclinicalImagesBase64?: string[];
+  title?: string;
 }
 
-// Define the state structure (Updated for Images)
+import {
+  saveConsultation,
+  getConsultationById,
+  updateConsultation,
+} from '@/lib/utils/localStorageManager';
+
+// Helper to generate unique IDs
+const generateUniqueId = () => Date.now().toString() + Math.random().toString(36).substring(2, 9);
+
+
+// Define the state structure (Updated for Images & Local Storage)
 interface SessionState {
+  currentConsultationId: string | null; // Added for local storage integration
   conversationHistory: ChatCompletionMessageParam[];
   currentQuestions: Question[];
   currentExplanation: string | null;
@@ -43,17 +67,18 @@ interface SessionState {
   structuredPatientExplanation: PatientExplanationData | null;
   medicalRecord: string | null;
   initialData: { fullName: string; age: string; gender: string; complaint: string } | null;
-  paraclinicalImagesBase64: string[]; // Renamed state for base64 images
-  currentAppStep: AppStep; // New state for managing UI flow
+  paraclinicalImagesBase64: string[];
+  currentAppStep: AppStep;
 
-  // Define actions (Updated for Images)
+  // Define actions
   startSession: (initialData: { fullName: string; age: string; gender: string; complaint: string }) => Promise<void>;
   submitAnswers: (answers: Record<string, string>) => Promise<void>;
-  submitParaclinicalImages: (imagesBase64: string[]) => Promise<void>; // New action for images
-  generateRecord: () => Promise<void>; // Existing action, will be updated
-  generateResultsSkippingParaclinical: () => Promise<void>; // New action to skip paraclinical
+  submitParaclinicalImages: (imagesBase64: string[]) => Promise<void>;
+  generateRecord: () => Promise<void>;
+  generateResultsSkippingParaclinical: () => Promise<void>;
   setError: (error: string | null) => void;
   resetSession: () => void;
+  loadConsultation: (consultationId: string) => Promise<void>; // Added for local storage
 
   // Internal helper actions
   _addHistory: (message: ChatCompletionMessageParam) => void;
@@ -64,11 +89,12 @@ const formatUserAnswers = (answers: Record<string, string>, questions: Question[
     return questions
       .map(q => `Answer for Q (${q.id}): "${q.text}"\n${answers[q.id] || 'No answer provided.'}`)
       .join('\n\n');
-}
+}; // Added semicolon
 
 // Create the store
 export const useSessionStore = create<SessionState>((set, get) => ({
-  // Initial state (Updated for Images)
+  // Initial state
+  currentConsultationId: null, // Initialize new state
   conversationHistory: [],
   currentQuestions: [],
   currentExplanation: null,
@@ -82,46 +108,78 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   structuredPatientExplanation: null,
   medicalRecord: null,
   initialData: null,
-  paraclinicalImagesBase64: [], // Initialize new state
+  paraclinicalImagesBase64: [],
   currentAppStep: 'initial',
 
   // Actions implementations
   setError: (error: string | null) => set({ error: error, currentAppStep: 'errorState', isLoading: false, isGeneratingExplanation: false, isGeneratingRecord: false }),
-  _addHistory: (message: ChatCompletionMessageParam) => set((state) => ({
-     conversationHistory: [...state.conversationHistory, message],
-  })),
-
-  resetSession: () => set({
-    initialData: null,
-    conversationHistory: [],
-    currentQuestions: [],
-    currentExplanation: null,
-    isLoading: false,
-    isGeneratingExplanation: false,
-    isGeneratingRecord: false,
-    error: null,
-    isSessionActive: false,
-    isComplete: false,
-    isReadyForRecord: false,
-    structuredPatientExplanation: null,
-    medicalRecord: null,
-    paraclinicalImagesBase64: [], // Reset image state
-    currentAppStep: 'initial',
+  _addHistory: (message: ChatCompletionMessageParam) => set((state) => {
+    const newHistory = [...state.conversationHistory, message];
+    // Also update in local storage if a session is active
+    const consultationId = get().currentConsultationId;
+    if (consultationId) {
+        updateConsultation(consultationId, { conversationHistory: newHistory, lastUpdated: Date.now() });
+    }
+    return { conversationHistory: newHistory };
   }),
 
-  startSession: async (initialData: { fullName: string; age: string; gender: string; complaint: string }) => {
-    get().resetSession();
+  resetSession: () => {
+    const consultationId = get().currentConsultationId;
+    const isCompleted = get().isComplete; // Use isComplete flag
+    const currentStep = get().currentAppStep;
+
+    if (consultationId) {
+      // Determine status based on whether it was completed or just ended
+      const status: Consultation['status'] = isCompleted || currentStep === 'viewResults' ? 'completed' : 'abandoned';
+      updateConsultation(consultationId, { status: status, lastUpdated: Date.now() });
+    }
     set({
+      currentConsultationId: null, // Clear current consultation ID
+      initialData: null,
+      conversationHistory: [],
+      currentQuestions: [],
+      currentExplanation: null,
+      isLoading: false,
+      isGeneratingExplanation: false,
+      isGeneratingRecord: false,
+      error: null,
+      isSessionActive: false,
+      isComplete: false,
+      isReadyForRecord: false,
+      structuredPatientExplanation: null,
+      medicalRecord: null,
+      paraclinicalImagesBase64: [],
+      currentAppStep: 'initial',
+    });
+  },
+
+  startSession: async (initialData: { fullName: string; age: string; gender: string; complaint: string }) => {
+    get().resetSession(); // Resets previous session, if any, and updates its status
+
+    const newConsultationId = generateUniqueId();
+    set({
+        currentConsultationId: newConsultationId, // Set new ID for current session
         isLoading: true,
         isSessionActive: true,
         error: null,
         initialData: initialData,
-        currentAppStep: 'anamnesis'
+        currentAppStep: 'anamnesis',
+        conversationHistory: [], // Ensure history is clean for new session
+        currentQuestions: [],
+        currentExplanation: null,
+        structuredPatientExplanation: null,
+        medicalRecord: null,
+        paraclinicalImagesBase64: [],
     });
+
     const { _addHistory } = get();
     const initialMessages = buildInitialPrompt(initialData);
-    _addHistory(initialMessages[0]);
-    _addHistory(initialMessages[1]);
+    // _addHistory will handle updating LS for these messages if we modify it to do so,
+    // but for initial save, it's better to save once with all data.
+    // For now, let's build history locally first.
+    let tempHistory = [...initialMessages];
+    set(state => ({ conversationHistory: [...state.conversationHistory, ...initialMessages] }));
+
 
     try {
       const response = await fetch('/api/ai-session', {
@@ -129,7 +187,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'start',
-          history: get().conversationHistory,
+          history: tempHistory, // Use tempHistory for the API call
           initialData: initialData,
         }),
       });
@@ -139,13 +197,35 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
       const data = await response.json();
       if (data.type === 'questions' && data.data) {
-         _addHistory({ role: 'assistant', content: JSON.stringify(data.data) });
+        // Add AI response to history (locally first, then set)
+        const assistantResponse: ChatCompletionMessageParam = { role: 'assistant', content: JSON.stringify(data.data) };
+        tempHistory.push(assistantResponse);
         set({
           currentQuestions: data.data.questions,
           currentExplanation: data.data.explanation,
+          conversationHistory: tempHistory, // Set final history
           isLoading: false,
-          currentAppStep: 'anamnesis',
+          // currentAppStep is already 'anamnesis'
         });
+
+        // Now save the initial consultation
+        const newConsultation: Consultation = {
+          id: newConsultationId,
+          startTime: Date.now(), // More accurate to place it here
+          lastUpdated: Date.now(),
+          status: 'in-progress',
+          title: `Consultation for ${initialData.fullName} - ${new Date(Date.now()).toLocaleDateString()}`,
+          initialData: initialData,
+          currentAppStep: get().currentAppStep,
+          conversationHistory: get().conversationHistory,
+          currentQuestions: get().currentQuestions,
+          currentExplanation: get().currentExplanation,
+          structuredPatientExplanation: null,
+          medicalRecord: null,
+          paraclinicalImagesBase64: [],
+        };
+        saveConsultation(newConsultation);
+
       } else if (data.type === 'error') {
         throw new Error(data.error || 'Received an error response from the API.');
       } else {
@@ -154,19 +234,21 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to start session.';
       set({ error: errorMessage, currentAppStep: 'errorState', isLoading: false, isSessionActive: false });
+      // If session start fails, we might want to remove the placeholder ID or mark it as failed.
+      // For now, resetSession will handle it as 'abandoned' if called next.
     }
   },
 
   submitAnswers: async (answers: Record<string, string>) => {
-    const { _addHistory, currentQuestions, initialData } = get();
+    const { _addHistory, currentQuestions, initialData, currentConsultationId } = get();
     if (currentQuestions.length === 0) return;
     if (!initialData) {
         set({ error: "Session not properly initialized.", currentAppStep: 'errorState' });
         return;
     }
-    set({ isLoading: true, error: null, currentAppStep: 'anamnesis' });
+    set({ isLoading: true, error: null }); // currentAppStep remains 'anamnesis' or changes based on response
     const userAnswerContent = formatUserAnswers(answers, currentQuestions);
-    _addHistory({ role: 'user', content: userAnswerContent });
+    _addHistory({ role: 'user', content: userAnswerContent }); // _addHistory will update LS
     const nextPromptMessages = buildNextPrompt(get().conversationHistory);
 
     try {
@@ -180,64 +262,75 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
       }
       const data = await response.json();
+      let newAppStep: AppStep = get().currentAppStep; // Default to current
       if (data.type === 'questions' && data.data) {
-        _addHistory({ role: 'assistant', content: JSON.stringify(data.data) });
+        _addHistory({ role: 'assistant', content: JSON.stringify(data.data) }); // _addHistory will update LS
+        newAppStep = 'anamnesis';
         set({
           currentQuestions: data.data.questions,
           currentExplanation: data.data.explanation,
           isLoading: false,
-          currentAppStep: 'anamnesis',
+          currentAppStep: newAppStep,
         });
       } else if (data.type === 'readyForRecord' && data.data) {
-         _addHistory({ role: 'assistant', content: JSON.stringify(data.data) });
+         _addHistory({ role: 'assistant', content: JSON.stringify(data.data) }); // _addHistory will update LS
+        newAppStep = 'paraclinicalUpload';
         set({
           isReadyForRecord: true,
           currentExplanation: data.data.explanation,
-          currentQuestions: [],
+          currentQuestions: [], // Clear questions as we move to next phase
           isLoading: false,
-          currentAppStep: 'paraclinicalUpload',
+          currentAppStep: newAppStep,
         });
       } else if (data.type === 'error') {
         throw new Error(data.error || 'Received an error response from the API during next step.');
       } else {
         throw new Error('Invalid response format received from the API route during next step.');
       }
+
+      if (currentConsultationId) {
+        const updatedConsultationData: Partial<Consultation> = {
+          conversationHistory: get().conversationHistory,
+          currentQuestions: get().currentQuestions,
+          currentExplanation: get().currentExplanation,
+          currentAppStep: newAppStep,
+          lastUpdated: Date.now(),
+          status: 'in-progress', // Remains in-progress
+        };
+        updateConsultation(currentConsultationId, updatedConsultationData);
+      }
+
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to process answers.';
       set({ error: errorMessage, currentAppStep: 'errorState', isLoading: false });
     }
   },
 
-  // New action for submitting images
   submitParaclinicalImages: async (imagesBase64: string[]) => {
-    const { conversationHistory, initialData, _addHistory } = get();
+    const { conversationHistory, initialData, _addHistory, currentConsultationId } = get();
      if (!initialData) {
         set({ error: "Session not properly initialized.", currentAppStep: 'errorState' });
         return;
     }
-    // Store the base64 images in the state first
     set({
-        paraclinicalImagesBase64: imagesBase64,
+        paraclinicalImagesBase64: imagesBase64, // Store images in state first
         isLoading: true,
         isGeneratingExplanation: true,
         error: null,
         currentAppStep: 'generatingExplanation'
     });
-    // Add a user message to history indicating images were submitted
     _addHistory({ role: 'user', content: `[User submitted ${imagesBase64.length} paraclinical image(s)]` });
-    // Pass the images to the prompt builder
-    // Ensure the correct state property is accessed here
     const currentImages = get().paraclinicalImagesBase64;
-    const promptMessages = buildGeneratePatientExplanationPrompt(conversationHistory, currentImages);
+    const promptMessages = buildGeneratePatientExplanationPrompt(get().conversationHistory, currentImages);
 
     try {
         const response = await fetch('/api/ai-session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                action: 'generatePatientExplanation', // Correct action string
+                action: 'generatePatientExplanation',
                 history: promptMessages,
-                images: currentImages // Send images in the body
+                images: currentImages
             }),
         });
         if (!response.ok) {
@@ -252,8 +345,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
                 isLoading: false,
                 isGeneratingExplanation: false,
                 currentAppStep: 'viewExplanation',
-                currentQuestions: [],
+                currentQuestions: [], // Clear questions
             });
+            if (currentConsultationId) {
+              const updatedConsultationData: Partial<Consultation> = {
+                conversationHistory: get().conversationHistory,
+                structuredPatientExplanation: get().structuredPatientExplanation,
+                paraclinicalImagesBase64: get().paraclinicalImagesBase64,
+                currentAppStep: 'viewExplanation',
+                lastUpdated: Date.now(),
+                status: 'in-progress',
+              };
+              updateConsultation(currentConsultationId, updatedConsultationData);
+            }
         } else if (data.type === 'error') {
             throw new Error(data.error || 'Received an error response from the API generating explanation.');
         } else {
@@ -266,7 +370,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   generateResultsSkippingParaclinical: async () => {
-    const { conversationHistory, initialData, _addHistory } = get(); // generateRecord removed as it's not used in this action
+    const { conversationHistory, initialData, _addHistory, currentConsultationId } = get();
 
     if (!initialData) {
       set({ error: "Session not properly initialized.", currentAppStep: 'errorState' });
@@ -275,31 +379,30 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     set({
       isLoading: true,
-      isGeneratingExplanation: true,
+      isGeneratingExplanation: true, // Used for the first part
       error: null,
       currentAppStep: 'generatingExplanation',
       paraclinicalImagesBase64: [], // Ensure images are empty
     });
 
     _addHistory({ role: 'user', content: `[User chose to skip paraclinical data upload]` });
-
-    // 1. Generate Patient Explanation (without images)
-    const explanationPromptMessages = buildGeneratePatientExplanationPrompt(conversationHistory, []); // Empty array for images
+    const explanationPromptMessages = buildGeneratePatientExplanationPrompt(get().conversationHistory, []);
 
     try {
+      // 1. Generate Patient Explanation (without images)
       const explanationResponse = await fetch('/api/ai-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'generatePatientExplanation',
           history: explanationPromptMessages,
-          images: [], // Explicitly send empty array
+          images: [],
         }),
       });
 
       if (!explanationResponse.ok) {
         const errorData = await explanationResponse.json();
-        throw new Error(errorData.error || `API Error generating explanation (skipped paraclinical): ${explanationResponse.statusText}`);
+        throw new Error(errorData.error || `API Error generating explanation (skipped): ${explanationResponse.statusText}`);
       }
 
       const explanationData = await explanationResponse.json();
@@ -307,25 +410,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         _addHistory({ role: 'assistant', content: JSON.stringify(explanationData.data) });
         set({
           structuredPatientExplanation: explanationData.data,
-          isLoading: false, // Stop loading for explanation part
-          isGeneratingExplanation: false,
-          currentAppStep: 'viewExplanation', // Temporarily to show explanation if needed, or directly to generatingRecord
+          // isLoading: false, // Keep true for next step
+          isGeneratingExplanation: false, // This part is done
+          currentAppStep: 'generatingRecord', // Move to generating record
+          isGeneratingRecord: true, // Indicate record generation started
           currentQuestions: [],
         });
 
+        // Update consultation after explanation part
+        if (currentConsultationId) {
+          updateConsultation(currentConsultationId, {
+            conversationHistory: get().conversationHistory,
+            structuredPatientExplanation: get().structuredPatientExplanation,
+            currentAppStep: 'generatingRecord', // Reflect current operation
+            lastUpdated: Date.now(),
+            paraclinicalImagesBase64: [],
+          });
+        }
+
         // 2. Automatically proceed to generate record (without images)
-        // We need to ensure generateRecord uses an empty image array
-        // For simplicity, we'll adapt the existing generateRecord or make it aware of this flow.
-        // For now, let's call a modified version of the generateRecord logic directly.
-
-        set({
-            isLoading: true, // Start loading for record part
-            isGeneratingRecord: true,
-            error: null,
-            currentAppStep: 'generatingRecord'
-        });
-
-        const recordPromptMessages = buildGenerateRecordPrompt(get().conversationHistory, initialData, []); // Empty array for images
+        const recordPromptMessages = buildGenerateRecordPrompt(get().conversationHistory, initialData, []);
 
         const recordResponse = await fetch('/api/ai-session', {
             method: 'POST',
@@ -334,13 +438,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               action: 'generateRecord',
               history: recordPromptMessages,
               initialData: initialData,
-              images: [], // Explicitly send empty array
+              images: [],
             }),
         });
 
         if (!recordResponse.ok) {
             const errorData = await recordResponse.json();
-            throw new Error(errorData.error || `API Error generating record (skipped paraclinical): ${recordResponse.statusText}`);
+            throw new Error(errorData.error || `API Error generating record (skipped): ${recordResponse.statusText}`);
         }
 
         const recordData = await recordResponse.json();
@@ -353,16 +457,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               isGeneratingRecord: false,
               currentAppStep: 'viewResults',
             });
+            if (currentConsultationId) {
+              const updatedConsultationData: Partial<Consultation> = {
+                conversationHistory: get().conversationHistory,
+                medicalRecord: get().medicalRecord,
+                currentAppStep: 'viewResults',
+                status: 'completed',
+                lastUpdated: Date.now(),
+              };
+              updateConsultation(currentConsultationId, updatedConsultationData);
+            }
         } else if (recordData.type === 'error') {
-            throw new Error(recordData.error || 'Received an error response from the API generating record (skipped paraclinical).');
+            throw new Error(recordData.error || 'API error generating record (skipped).');
         } else {
-            throw new Error('Invalid response format received from the API route generating record (skipped paraclinical).');
+            throw new Error('Invalid API response for record (skipped).');
         }
 
       } else if (explanationData.type === 'error') {
-        throw new Error(explanationData.error || 'Received an error response from the API generating explanation (skipped paraclinical).');
+        throw new Error(explanationData.error || 'API error generating explanation (skipped).');
       } else {
-        throw new Error('Invalid response format received from the API route generating explanation (skipped paraclinical).');
+        throw new Error('Invalid API response for explanation (skipped).');
       }
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to generate results skipping paraclinical data.';
@@ -371,8 +485,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   generateRecord: async () => {
-    // Use paraclinicalImagesBase64
-    const { conversationHistory, initialData, structuredPatientExplanation, paraclinicalImagesBase64, _addHistory } = get();
+    const { conversationHistory, initialData, structuredPatientExplanation, paraclinicalImagesBase64, _addHistory, currentConsultationId } = get();
     if (!initialData) {
       set({ error: "Cannot generate final record: Initial patient data is missing.", currentAppStep: 'errorState' });
       return;
@@ -387,8 +500,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         error: null,
         currentAppStep: 'generatingRecord'
     });
-    // Pass images to the prompt builder
-    const recordPromptMessages = buildGenerateRecordPrompt(conversationHistory, initialData, paraclinicalImagesBase64);
+    const recordPromptMessages = buildGenerateRecordPrompt(get().conversationHistory, initialData, paraclinicalImagesBase64);
 
     try {
       const response = await fetch('/api/ai-session', {
@@ -398,7 +510,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           action: 'generateRecord',
           history: recordPromptMessages,
           initialData: initialData,
-          images: paraclinicalImagesBase64 // Send images in the body
+          images: paraclinicalImagesBase64
         }),
       });
       if (!response.ok) {
@@ -415,6 +527,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           isGeneratingRecord: false,
           currentAppStep: 'viewResults',
         });
+        if (currentConsultationId) {
+          const updatedConsultationData: Partial<Consultation> = {
+            conversationHistory: get().conversationHistory,
+            medicalRecord: get().medicalRecord,
+            // structuredPatientExplanation is already set from previous step
+            currentAppStep: 'viewResults',
+            status: 'completed',
+            lastUpdated: Date.now(),
+          };
+          updateConsultation(currentConsultationId, updatedConsultationData);
+        }
       } else if (data.type === 'error') {
         throw new Error(data.error || 'Received an error response from the API generating record.');
       } else {
@@ -425,6 +548,52 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       set({ error: errorMessage, currentAppStep: 'errorState', isLoading: false, isGeneratingRecord: false });
     }
   },
-}));
 
-// AppStep is exported at the top
+  loadConsultation: async (consultationId: string) => {
+    // Manually clear relevant fields before loading to avoid merging states
+    set({
+      currentConsultationId: null,
+      initialData: null,
+      conversationHistory: [],
+      currentQuestions: [],
+      currentExplanation: null,
+      structuredPatientExplanation: null,
+      medicalRecord: null,
+      paraclinicalImagesBase64: [],
+      currentAppStep: 'initial', // Default to initial before loading
+      isSessionActive: false,
+      isLoading: true, // Set loading true while fetching
+      error: null,
+      isComplete: false,
+      isReadyForRecord: false,
+      isGeneratingExplanation: false,
+      isGeneratingRecord: false,
+    });
+
+    const consultation = getConsultationById(consultationId); // Synchronous call
+
+    if (consultation) {
+      set({
+        currentConsultationId: consultation.id,
+        initialData: consultation.initialData,
+        conversationHistory: consultation.conversationHistory,
+        currentQuestions: consultation.currentQuestions || [], // Ensure it's an array
+        currentExplanation: consultation.currentExplanation,
+        structuredPatientExplanation: consultation.structuredPatientExplanation,
+        medicalRecord: consultation.medicalRecord,
+        paraclinicalImagesBase64: consultation.paraclinicalImagesBase64 || [],
+        currentAppStep: consultation.currentAppStep,
+        isSessionActive: true, // A loaded session is active
+        isLoading: false, // Done loading
+        error: null,
+        isComplete: consultation.status === 'completed',
+        // Determine isReadyForRecord based on the loaded step
+        isReadyForRecord: consultation.currentAppStep === 'paraclinicalUpload' ||
+                          consultation.currentAppStep === 'viewExplanation' ||
+                          (consultation.currentAppStep === 'anamnesis' && (consultation.currentQuestions || []).length === 0 && !!consultation.currentExplanation), // More robust check
+      });
+    } else {
+      set({ error: `Consultation with ID ${consultationId} not found.`, isLoading: false, currentAppStep: 'initial' });
+    }
+  },
+}));

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react'; // Ensure useEffect is imported
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardContent, CardFooter, CardTitle, CardDescription } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -39,7 +39,37 @@ export default function Home() {
     resetSession,
     // isGeneratingExplanation, // Removed as it's not used directly in this component
     isGeneratingRecord,
+    initialData, // Ensure initialData is destructured
+    currentConsultationId, // Ensure currentConsultationId is destructured
   } = useSessionStore();
+
+  // Effect to populate form fields from loaded session's initialData
+  useEffect(() => {
+    if (initialData) {
+      setFullName(initialData.fullName || '');
+      setAge(initialData.age || '');
+      setGender(initialData.gender || '');
+      setComplaint(initialData.complaint || '');
+    } else {
+      // This case handles when a session is reset and initialData becomes null
+      setFullName('');
+      setAge('');
+      setGender('');
+      setComplaint('');
+    }
+  }, [initialData]); // Runs when initialData from the store changes
+
+  // Effect to reset local UI states when the session context changes
+  useEffect(() => {
+    // This effect runs when a new session is loaded via sidebar, or when resetSession clears currentConsultationId.
+    setCurrentAnswers({});
+    setSelectedFiles([]);
+    setFileError(null);
+    setFormError(null); // Reset general form error as well
+
+    // If the app step is 'initial' after a session change, it implies a fresh start or a reset.
+    // The initialData effect above will handle clearing form fields if initialData is also null.
+  }, [currentConsultationId]); // Runs when the currentConsultationId from the store changes
 
   // Determine overall loading state based on current step
   const anyLoading = currentAppStep === 'generatingExplanation' || currentAppStep === 'generatingRecord' || isLoading;
