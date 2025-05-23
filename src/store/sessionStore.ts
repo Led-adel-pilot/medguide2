@@ -172,11 +172,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         paraclinicalImagesBase64: [],
     });
 
-    const { _addHistory } = get();
+    const { _addHistory: _ } = get(); // Prefixed as unused
     const initialMessages = buildInitialPrompt(initialData);
     // _addHistory will handle updating LS for these messages if we modify it to do so,
     // but for initial save, it's better to save once with all data.
     // For now, let's build history locally first.
+    // eslint-disable-next-line prefer-const
     let tempHistory = [...initialMessages];
     set(state => ({ conversationHistory: [...state.conversationHistory, ...initialMessages] }));
 
@@ -307,7 +308,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   submitParaclinicalImages: async (imagesBase64: string[]) => {
-    const { conversationHistory, initialData, _addHistory, currentConsultationId } = get();
+    const { conversationHistory: _, initialData, _addHistory, currentConsultationId } = get(); // Prefixed conversationHistory
      if (!initialData) {
         set({ error: "Session not properly initialized.", currentAppStep: 'errorState' });
         return;
@@ -370,7 +371,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   generateResultsSkippingParaclinical: async () => {
-    const { conversationHistory, initialData, _addHistory, currentConsultationId } = get();
+    const { conversationHistory: _, initialData, _addHistory, currentConsultationId } = get(); // Prefixed conversationHistory
 
     if (!initialData) {
       set({ error: "Session not properly initialized.", currentAppStep: 'errorState' });
@@ -485,7 +486,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   generateRecord: async () => {
-    const { conversationHistory, initialData, structuredPatientExplanation, paraclinicalImagesBase64, _addHistory, currentConsultationId } = get();
+    const { conversationHistory: _, initialData, structuredPatientExplanation, paraclinicalImagesBase64, _addHistory, currentConsultationId } = get(); // Prefixed conversationHistory
     if (!initialData) {
       set({ error: "Cannot generate final record: Initial patient data is missing.", currentAppStep: 'errorState' });
       return;
